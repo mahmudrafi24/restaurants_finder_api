@@ -12,6 +12,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from typing_extensions import Self
 
 Environment = Literal["development", "staging", "production"]
 
@@ -76,6 +77,14 @@ class Settings(BaseSettings):
     # ── Upstream: endpoints ──────────────────────────────────────────────────
     nominatim_base_url: str = "https://nominatim.openstreetmap.org"
     overpass_base_url: str = "https://overpass-api.de/api/interpreter"
+    # Comma-separated fallback Overpass mirrors. Tried in order when the primary URL fails.
+    # The main overpass-api.de blocks many cloud providers; these mirrors generally don't.
+    overpass_fallback_urls: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "https://overpass.private.coffee/api/interpreter",
+            "https://overpass.openstreetmap.ru/api/interpreter",
+        ]
+    )
     # Photon is an OSM-based geocoder built for type-ahead search, used for city suggestions.
     # Nominatim matches whole names only — "hambu" finds a village in Papua New Guinea, never
     # Hamburg — so it cannot drive an autocomplete. Nominatim remains the authority for
@@ -126,6 +135,33 @@ class Settings(BaseSettings):
             except json.JSONDecodeError:
                 pass  # not valid JSON after all; fall through to comma-splitting
         return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+
+    @field_validator("overpass_fallback_urls", mode="before")
+    @classmethod
+    def _parse_fallback_urls(cls, value: object) -> object:
+        """Accept ``OVERPASS_FALLBACK_URLS`` as comma-separated or JSON array."""
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                pass
+        return [url.strip() for url in stripped.split(",") if url.strip()]
+
+    @property
+    def overpass_urls(self) -> list[str]:
+        """Primary Overpass URL followed by any fallbacks, deduplicated."""
+        seen: set[str] = set()
+        urls: list[str] = []
+        for url in [self.overpass_base_url, *self.overpass_fallback_urls]:
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+        return urls
 
     @field_validator("cors_origin_regex", mode="before")
     @classmethod

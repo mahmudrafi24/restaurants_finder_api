@@ -48,10 +48,11 @@ class OverpassService:
     ) -> list[dict[str, Any]]:
         """Return every OSM element of the given amenity types within ``radius_km``.
 
+        Tries each configured Overpass endpoint in order (primary, then fallbacks).
+        If an endpoint fails, the next one is attempted before giving up.
+
         Raises:
-            UpstreamError: Overpass returned a non-JSON or malformed body.
-            UpstreamTimeoutError, UpstreamRateLimitedError, UpstreamUnavailableError:
-                Propagated from :class:`~app.core.http.UpstreamClient`.
+            UpstreamError: All Overpass endpoints failed or returned malformed data.
         """
         if not amenities:
             return []
@@ -63,38 +64,71 @@ class OverpassService:
             amenities=amenities,
         )
 
-        response = await self._client.request(
-            "POST",
-            self._settings.overpass_base_url,
-            service=SERVICE_NAME,
-            content=query,
-            # Raw body, not application/x-www-form-urlencoded — see the module docstring.
-            headers={"Content-Type": "text/plain; charset=utf-8"},
-        )
+        overpass_urls = self._settings.overpass_urls
+        last_error: UpstreamError | None = None
 
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise UpstreamError(
-                SERVICE_NAME, "Overpass returned a response that was not valid JSON."
-            ) from exc
+        for i, url in enumerate(overpass_urls, 1):
+            try:
+                response = await self._client.request(
+                    "POST",
+                    url,
+                    service=SERVICE_NAME,
+                    content=query,
+                    # Raw body, not application/x-www-form-urlencoded — see the module docstring.
+                    headers={"Content-Type": "text/plain; charset=utf-8"},
+                )
+            except UpstreamError as exc:
+                last_error = exc
+                if i < len(overpass_urls):
+                    logger.warning(
+                        "Overpass endpoint %s failed, trying next mirror (%d/%d): %s",
+                        url,
+                        i,
+                        len(overpass_urls),
+                        exc.message,
+                    )
+                continue
 
-        if not isinstance(payload, dict):
-            raise UpstreamError(SERVICE_NAME, "Overpass returned an unexpected payload shape.")
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                last_error = UpstreamError(
+                    SERVICE_NAME, "Overpass returned a response that was not valid JSON."
+                )
+                if i < len(overpass_urls):
+                    logger.warning(
+                        "Overpass endpoint %s returned invalid JSON, trying next mirror", url
+                    )
+                continue
 
-        elements = payload.get("elements")
-        if not isinstance(elements, list):
-            raise UpstreamError(SERVICE_NAME, "Overpass response contained no element list.")
+            if not isinstance(payload, dict):
+                last_error = UpstreamError(
+                    SERVICE_NAME, "Overpass returned an unexpected payload shape."
+                )
+                continue
 
-        logger.info(
-            "fetched OSM elements",
-            extra={
-                "element_count": len(elements),
-                "radius_km": radius_km,
-                "amenities": [amenity.value for amenity in amenities],
-            },
-        )
-        return elements
+            elements = payload.get("elements")
+            if not isinstance(elements, list):
+                last_error = UpstreamError(
+                    SERVICE_NAME, "Overpass response contained no element list."
+                )
+                continue
+
+            if i > 1:
+                logger.info("Overpass request succeeded via fallback mirror: %s", url)
+
+            logger.info(
+                "fetched OSM elements",
+                extra={
+                    "element_count": len(elements),
+                    "radius_km": radius_km,
+                    "amenities": [amenity.value for amenity in amenities],
+                },
+            )
+            return elements
+
+        raise last_error or UpstreamError(SERVICE_NAME, "All Overpass endpoints failed.")
+
 
     def build_query(
         self,

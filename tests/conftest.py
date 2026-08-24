@@ -118,6 +118,7 @@ def settings() -> Settings:
         retry_backoff_seconds=0.0,
         city_cache_ttl_seconds=0,  # disables the geocoding cache
         upstream_timeout_seconds=5.0,
+        overpass_fallback_urls=[],  # tests mock only the primary URL
     )
 
 
