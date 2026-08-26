@@ -131,6 +131,7 @@ class Settings(BaseSettings):
             return []
         if stripped.startswith("["):
             try:
+                # pyrefly: ignore [no-any-return-explicit]
                 return json.loads(stripped)
             except json.JSONDecodeError:
                 pass  # not valid JSON after all; fall through to comma-splitting
@@ -147,6 +148,7 @@ class Settings(BaseSettings):
             return []
         if stripped.startswith("["):
             try:
+                # pyrefly: ignore [no-any-return-explicit]
                 return json.loads(stripped)
             except json.JSONDecodeError:
                 pass
