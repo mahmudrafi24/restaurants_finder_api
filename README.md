@@ -115,6 +115,114 @@ All routes are prefixed with `/api/v1`.
 
 ---
 
+## Accessing the API
+
+Once the server is running (`uvicorn app.main:app --reload`):
+
+| What | URL |
+|------|-----|
+| Base URL | `http://127.0.0.1:8000/api/v1` |
+| Interactive docs (try requests in the browser) | `http://127.0.0.1:8000/docs` |
+| Health check | `http://127.0.0.1:8000/api/v1/health` |
+
+Quick check from a terminal:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/health
+curl "http://127.0.0.1:8000/api/v1/cities/search?q=hamb"
+```
+
+To reach it from another device on your network, start with `uvicorn app.main:app --host 0.0.0.0 --port 8000` and use `http://<your-pc-ip>:8000`. When deployed on Vercel, replace the base URL with your deployment URL (e.g. `https://<project>.vercel.app/api/v1`).
+
+---
+
+## Testing with Postman
+
+### 1. Start the backend
+
+```bash
+.venv\Scripts\activate
+uvicorn app.main:app --reload
+```
+
+Keep this terminal open. Confirm `http://127.0.0.1:8000/docs` loads in a browser.
+
+### 2. Set up a Postman environment (optional but handy)
+
+Create an environment with a variable `baseUrl` = `http://127.0.0.1:8000/api/v1`, then use `{{baseUrl}}` in the request URLs below.
+
+> **Shortcut:** In Postman choose **Import → Link** and paste `http://127.0.0.1:8000/openapi.json` to auto-generate a collection with every endpoint.
+
+### 3. Requests
+
+#### Health check
+- **Method:** `GET`
+- **URL:** `{{baseUrl}}/health`
+- Expect `200 OK` with status, version and environment.
+
+#### City search
+- **Method:** `GET`
+- **URL:** `{{baseUrl}}/cities/search?q=hamburg&limit=5`
+- Or add `q` / `limit` under the **Params** tab.
+- Expect `200 OK` with a list of cities and coordinates.
+
+#### Search places
+- **Method:** `POST`
+- **URL:** `{{baseUrl}}/places/search`
+- **Body:** `raw` → `JSON` (Postman sets `Content-Type: application/json`)
+
+```json
+{
+  "city": "Hamburg",
+  "radius_km": 5,
+  "amenities": ["cafe", "restaurant", "fast_food"]
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `city` | Required, 2–200 chars |
+| `radius_km` | 1–25, default `10` |
+| `amenities` | At least one of `cafe`, `restaurant`, `fast_food` |
+| `latitude`, `longitude` | Optional — skip geocoding by passing coordinates (e.g. from city search) |
+
+The response contains the `places` list, stats and `elapsed_ms`. Large radii can take a while — Overpass is a public service.
+
+#### Export places
+- **Method:** `POST`
+- **URL:** `{{baseUrl}}/places/export`
+- **Body:** `raw` → `JSON`
+
+```json
+{
+  "format": "csv",
+  "city_name": "Hamburg",
+  "places": [
+    {
+      "osm_id": "node/123456",
+      "name": "Example Cafe",
+      "amenity": "cafe",
+      "latitude": 53.55,
+      "longitude": 9.99
+    }
+  ]
+}
+```
+
+`format` is `xlsx` (default), `csv` or `geojson`. For real data, copy the `places` array from the search response into this body. Match the `Place` schema in `/docs` if a `422` is returned for missing fields.
+
+To save the file, click **Send and Download** (arrow next to **Send**). For CSV/GeoJSON you can also view the content in the response body.
+
+### Common errors
+
+| Status | Meaning |
+|--------|---------|
+| `422` | Invalid body/params — read the response's error details |
+| `404`/`502`/`504` | City not found or an upstream service (Nominatim/Overpass/Photon) failed or timed out — retry |
+| Connection refused | Server not running, or wrong host/port |
+
+---
+
 ## Running Tests
 
 The test suite uses **pytest** with **respx** to mock all upstream HTTP calls — no real network requests are made.
