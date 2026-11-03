@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import PlaceSearchDep
 from app.schemas.place import ExportRequest, SearchRequest, SearchResponse
 from app.services.exporters.base import build_filename, get_exporter
+from app.services.exporters.render import render_export
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +61,19 @@ async def search_places(payload: SearchRequest, service: PlaceSearchDep) -> Sear
     },
     status_code=status.HTTP_200_OK,
 )
-async def export_places(payload: ExportRequest) -> Response:
+async def export_places(payload: ExportRequest, request: Request) -> Response:
     """Render already-fetched rows into a downloadable file.
 
     Stateless by design: the client posts back the rows it received from ``/places/search``, so
     Overpass is never queried twice for data the caller already holds.
     """
     exporter = get_exporter(payload.format)
-    content = exporter.render(payload.places, city_name=payload.city_name)
+    content = await render_export(
+        exporter,
+        payload.places,
+        city_name=payload.city_name,
+        slots=request.app.state.export_slots,
+    )
     filename = build_filename(payload.city_name, exporter.extension)
 
     logger.info(

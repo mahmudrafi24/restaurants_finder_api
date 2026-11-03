@@ -222,7 +222,7 @@ class TestDoubleMappingCollapse:
                 "id": 1,
                 "lat": 53.5503,
                 "lon": 9.9937,
-                "tags": {"amenity": "cafe", "name": "Cafe Twice"},
+                "tags": {"amenity": "cafe", "name": "Cafe Twice", "phone": "+49 40 999"},
             },
             {
                 "type": "way",

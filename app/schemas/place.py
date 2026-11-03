@@ -14,6 +14,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     computed_field,
     field_validator,
     model_validator,
@@ -26,9 +27,11 @@ from app.schemas.city import City
 MIN_RADIUS_KM: Final[int] = 1
 MAX_RADIUS_KM: Final[int] = 25
 
-#: Cap on rows accepted by the export endpoint. Also keeps the request body well under the
-#: 4.5 MB limit Vercel imposes on serverless function payloads.
+#: Row and byte limits are independent: middleware enforces the request byte budget.
 MAX_EXPORT_ROWS: Final[int] = 10_000
+MAX_REQUEST_BYTES: Final[int] = 4_000_000
+Text = Annotated[str, StringConstraints(max_length=2000)]
+CityName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=200)]
 
 
 class AmenityType(StrEnum):
@@ -59,11 +62,11 @@ class ExportFormat(StrEnum):
 class Address(BaseModel):
     """Structured address, kept in parts so callers can group or filter by any component."""
 
-    house_number: str | None = None
-    street: str | None = None
-    suburb: str | None = None
-    city: str | None = None
-    postcode: str | None = None
+    house_number: Text | None = None
+    street: Text | None = None
+    suburb: Text | None = None
+    city: Text | None = None
+    postcode: Text | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -94,20 +97,20 @@ class Place(BaseModel):
         }
     )
 
-    osm_id: str = Field(
+    osm_id: Annotated[str, Field(max_length=100)] = Field(
         ...,
         description="Stable OpenStreetMap identifier, `<type>/<id>`. Used as the dedup key.",
     )
-    name: str
+    name: Text
     amenity: AmenityType
-    cuisine: list[str] = Field(
+    cuisine: Annotated[list[Text], Field(max_length=100)] = Field(
         default_factory=list,
         description="OSM cuisine tags, split on `;`. Empty when untagged.",
     )
     address: Address = Field(default_factory=Address)
-    phone: str | None = None
-    website: str | None = None
-    opening_hours: str | None = None
+    phone: Text | None = None
+    website: Text | None = None
+    opening_hours: Text | None = None
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)
 
@@ -137,7 +140,7 @@ class SearchRequest(BaseModel):
         }
     )
 
-    city: Annotated[str, Field(min_length=2, max_length=200)]
+    city: CityName
     radius_km: Annotated[int, Field(ge=MIN_RADIUS_KM, le=MAX_RADIUS_KM)] = 10
     amenities: Annotated[list[AmenityType], Field(min_length=1)] = Field(
         default_factory=lambda: list(AmenityType)
@@ -205,5 +208,7 @@ class ExportRequest(BaseModel):
     """
 
     format: ExportFormat = ExportFormat.XLSX
-    city_name: Annotated[str, Field(min_length=1, max_length=200)]
+    city_name: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+    ]
     places: Annotated[list[Place], Field(min_length=1, max_length=MAX_EXPORT_ROWS)]

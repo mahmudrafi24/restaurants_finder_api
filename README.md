@@ -302,3 +302,13 @@ restaurant-scraper-api/
 ## License
 
 MIT
+
+## Request budgets and audit fixes
+
+See [the bug fix report](docs/BUG_FIX_REPORT.md) for changes, test evidence and deployment limits.
+The API enforces a 55-second total request deadline and a 4,000,000-byte request body limit for
+search/export routes. Request admission defaults to four simultaneous expensive requests and
+30 requests per client per minute, per worker. Exports also retain the 10,000-row cap.
+Use the updated `.env.example` timeout values to leave room for fallback mirrors.
+For multiple workers or replicas, enforce shared rate limits and provider pacing at ingress or
+through a dedicated geocoding service.

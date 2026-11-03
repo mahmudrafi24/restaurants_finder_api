@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +20,7 @@ from app.api.v1.router import router as v1_router
 from app.config import VERSION, Settings, get_settings
 from app.core.errors import AppError
 from app.core.http import UpstreamClient
+from app.core.limits import RequestLimitsMiddleware
 from app.core.logging import configure_logging
 from app.services.geocoding import GeocodingService
 from app.services.overpass import OverpassService
@@ -48,10 +49,10 @@ async def _keep_awake_task() -> None:
     external_url = os.getenv("RENDER_EXTERNAL_URL")
     if not external_url:
         return
-        
+
     health_url = f"{external_url.rstrip('/')}/api/v1/health"
     import httpx
-    
+
     async with httpx.AsyncClient() as client:
         while True:
             await asyncio.sleep(600)  # 10 minutes
@@ -60,7 +61,6 @@ async def _keep_awake_task() -> None:
                 logger.debug("pinged self to stay awake", extra={"url": health_url})
             except Exception as exc:
                 logger.warning("self-ping failed", exc_info=exc)
-
 
 
 @asynccontextmanager
@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     geocoding = GeocodingService(upstream, settings)
     overpass = OverpassService(upstream, settings)
 
+    app.state.export_slots = asyncio.Semaphore(2)
     app.state.upstream_client = upstream
     app.state.geocoding_service = geocoding
     app.state.suggestion_service = SuggestionService(upstream, settings)
@@ -89,12 +90,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "application started",
         extra={"environment": settings.environment, "version": VERSION},
     )
-    
+
     awake_task = asyncio.create_task(_keep_awake_task())
     try:
         yield
     finally:
         awake_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await awake_task
         await upstream.aclose()
         logger.info("application stopped")
 
@@ -134,12 +137,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 def _register_middleware(app: FastAPI, settings: Settings) -> None:
-    """Install CORS.
-
-    Rate limiting would be added here. It is deliberately not enabled: Overpass applies a
-    fair-use policy, so a public deployment without per-IP limits risks having its traffic
-    throttled. Adding `slowapi` or an equivalent at this point requires no route changes.
-    """
+    """Install request budgets and admission control inside CORS."""
+    app.add_middleware(RequestLimitsMiddleware, settings=settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

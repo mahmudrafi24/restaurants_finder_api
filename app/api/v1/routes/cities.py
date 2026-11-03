@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from pydantic import BeforeValidator
 
 from app.api.deps import GeocodingDep, SuggestionDep
 from app.core.errors import UpstreamError
@@ -26,6 +27,7 @@ async def search_cities(
     geocoding: GeocodingDep,
     q: Annotated[
         str,
+        BeforeValidator(lambda value: value.strip() if isinstance(value, str) else value),
         Query(
             min_length=2,
             max_length=200,

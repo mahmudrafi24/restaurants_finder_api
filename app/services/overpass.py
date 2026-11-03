@@ -91,7 +91,7 @@ class OverpassService:
 
             try:
                 payload = response.json()
-            except ValueError as exc:
+            except ValueError:
                 last_error = UpstreamError(
                     SERVICE_NAME, "Overpass returned a response that was not valid JSON."
                 )
@@ -107,8 +107,14 @@ class OverpassService:
                 )
                 continue
 
+            if payload.get("remark"):
+                last_error = UpstreamError(SERVICE_NAME, "Overpass could not complete the query.")
+                continue
+
             elements = payload.get("elements")
-            if not isinstance(elements, list):
+            if not isinstance(elements, list) or any(
+                not isinstance(item, dict) for item in elements
+            ):
                 last_error = UpstreamError(
                     SERVICE_NAME, "Overpass response contained no element list."
                 )
@@ -128,7 +134,6 @@ class OverpassService:
             return elements
 
         raise last_error or UpstreamError(SERVICE_NAME, "All Overpass endpoints failed.")
-
 
     def build_query(
         self,
