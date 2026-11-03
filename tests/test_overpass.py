@@ -136,3 +136,73 @@ class TestFetchAmenities:
             await service.fetch_amenities(
                 latitude=1.0, longitude=2.0, radius_km=5, amenities=[AmenityType.CAFE]
             )
+
+
+async def test_slow_primary_uses_mirror_even_with_legacy_timeout_and_retry_settings(
+    settings: Settings, mock_upstreams: respx.MockRouter
+) -> None:
+    import asyncio
+
+    import httpx
+
+    settings.upstream_timeout_seconds = 55
+    settings.max_retries = 2
+    settings.overpass_attempt_timeout_seconds = 0.02
+    settings.overpass_fallback_urls = ["https://mirror.test/api/interpreter"]
+    attempts = 0
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={"elements": []})
+
+    mock_upstreams.post(OVERPASS_URL).mock(side_effect=slow)
+    mirror = mock_upstreams.post(settings.overpass_fallback_urls[0]).respond(json={"elements": []})
+    client = UpstreamClient(settings)
+    try:
+        assert (
+            await asyncio.wait_for(
+                OverpassService(client, settings).fetch_amenities(
+                    latitude=0, longitude=0, radius_km=1, amenities=[AmenityType.CAFE]
+                ),
+                0.5,
+            )
+            == []
+        )
+        assert attempts == 1
+        assert mirror.call_count == 1
+    finally:
+        await client.aclose()
+
+
+async def test_overpass_switches_mirrors_instead_of_retrying_failed_primary(
+    settings: Settings, mock_upstreams: respx.MockRouter
+) -> None:
+    settings.max_retries = 2
+    settings.overpass_fallback_urls = ["https://mirror.test/api/interpreter"]
+    primary = mock_upstreams.post(OVERPASS_URL).respond(status_code=503)
+    mirror = mock_upstreams.post(settings.overpass_fallback_urls[0]).respond(json={"elements": []})
+    client = UpstreamClient(settings)
+    try:
+        assert (
+            await OverpassService(client, settings).fetch_amenities(
+                latitude=0, longitude=0, radius_km=1, amenities=[AmenityType.CAFE]
+            )
+            == []
+        )
+        assert primary.call_count == 1
+        assert mirror.call_count == 1
+    finally:
+        await client.aclose()
+
+
+def test_legacy_overpass_query_timeout_leaves_room_for_receiving_response(
+    settings: Settings,
+) -> None:
+    settings.overpass_query_timeout_seconds = 50
+    client = UpstreamClient(settings)
+    query = OverpassService(client, settings).build_query(
+        latitude=0, longitude=0, radius_km=1, amenities=[AmenityType.CAFE]
+    )
+    assert "[timeout:12]" in query

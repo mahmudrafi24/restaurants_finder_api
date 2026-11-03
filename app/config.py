@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     # Value passed to Overpass' own `[timeout:N]` setting, in seconds. Kept under
     # `upstream_timeout_seconds` so Overpass reports a clean error before our socket gives up.
     overpass_query_timeout_seconds: int = Field(default=12, ge=1, le=50)
+    overpass_attempt_timeout_seconds: float = Field(default=16.0, gt=0, le=16)
     max_retries: int = Field(default=0, ge=0, le=2)
     retry_backoff_seconds: float = Field(default=1.5, ge=0, le=5)
 
@@ -115,6 +116,9 @@ class Settings(BaseSettings):
     # ── Geocoding cache (Nominatim policy compliance) ────────────────────────
     city_cache_ttl_seconds: int = 86_400  # city coordinates are effectively static
     city_cache_max_entries: int = 512
+    place_cache_ttl_seconds: int = Field(default=600, ge=0, le=3600)
+    place_cache_max_entries: int = Field(default=8, ge=1, le=64)
+    place_cache_max_entry_bytes: int = Field(default=2_000_000, ge=1, le=4_000_000)
 
     @field_validator("cors_origins", mode="before")
     @classmethod

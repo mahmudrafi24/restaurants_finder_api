@@ -67,3 +67,10 @@ Verification: 213 tests passed with the existing external selector launcher; the
 cases also passed with ordinary pytest. Ruff and mypy passed. Test commands used `DEBUG=false`
 to override this session's unrelated `DEBUG=release` environment value, which is not a valid
 boolean setting. The full default suite and deployed smoke tests remain unverified here.
+
+## Search latency improvements
+
+See [search performance](SEARCH_PERFORMANCE.md) for the Leipzig timeout reproduction,
+per-mirror deadline, bounded shared result cache, duplicate-request coordination,
+deployment checks, and longer-term spatial database architecture. Current verification:
+225 backend tests passed with ordinary pytest (`DEBUG=false`); Ruff and mypy passed.

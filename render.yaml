@@ -28,3 +28,11 @@ services:
         value: "2"
       - key: REQUESTS_PER_MINUTE
         value: "30"
+      - key: OVERPASS_ATTEMPT_TIMEOUT_SECONDS
+        value: "16"
+      - key: PLACE_CACHE_TTL_SECONDS
+        value: "600"
+      - key: PLACE_CACHE_MAX_ENTRIES
+        value: "8"
+      - key: PLACE_CACHE_MAX_ENTRY_BYTES
+        value: "2000000"

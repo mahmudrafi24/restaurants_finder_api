@@ -56,7 +56,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.upstream_client = upstream
     app.state.geocoding_service = geocoding
     app.state.suggestion_service = SuggestionService(upstream, settings)
-    app.state.place_search_service = PlaceSearchService(geocoding, overpass)
+    app.state.place_search_service = PlaceSearchService(
+        geocoding,
+        overpass,
+        cache_ttl_seconds=settings.place_cache_ttl_seconds,
+        cache_max_entries=settings.place_cache_max_entries,
+        cache_max_entry_bytes=settings.place_cache_max_entry_bytes,
+    )
 
     if not settings.contact_email:
         # Nominatim's policy asks for a contact address and rejects placeholder ones outright.

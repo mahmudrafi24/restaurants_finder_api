@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from app.schemas.city import City
 from app.schemas.place import Address, AmenityType, Place, SearchResponse, SearchStats
+from app.services.place_cache import PlaceResultCache
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -41,9 +42,22 @@ _WEBSITE_KEYS: Final[tuple[str, ...]] = ("website", "contact:website", "url")
 class PlaceSearchService:
     """Coordinates geocoding and Overpass into a single search operation."""
 
-    def __init__(self, geocoding: GeocodingService, overpass: OverpassService) -> None:
+    def __init__(
+        self,
+        geocoding: GeocodingService,
+        overpass: OverpassService,
+        *,
+        cache_ttl_seconds: int = 600,
+        cache_max_entries: int = 8,
+        cache_max_entry_bytes: int = 2_000_000,
+    ) -> None:
         self._geocoding = geocoding
         self._overpass = overpass
+        self._results = PlaceResultCache(
+            ttl_seconds=cache_ttl_seconds,
+            max_entries=cache_max_entries,
+            max_entry_bytes=cache_max_entry_bytes,
+        )
 
     async def search(
         self,
@@ -71,13 +85,27 @@ class PlaceSearchService:
             if coordinates is not None
             else await self._geocoding.resolve(city)
         )
-        elements = await self._overpass.fetch_amenities(
-            latitude=resolved.latitude,
-            longitude=resolved.longitude,
-            radius_km=radius_km,
-            amenities=amenities,
+
+        async def load_places() -> list[Place]:
+            elements = await self._overpass.fetch_amenities(
+                latitude=resolved.latitude,
+                longitude=resolved.longitude,
+                radius_km=radius_km,
+                amenities=amenities,
+            )
+            return normalize_elements(elements)
+
+        # Exact coordinates preserve coverage. Amenity ordering and city aliases don't
+        # change the actual geographic query and should share results across users.
+        key = repr(
+            (
+                resolved.latitude,
+                resolved.longitude,
+                radius_km,
+                tuple(sorted({amenity.value for amenity in amenities})),
+            )
         )
-        places = normalize_elements(elements)
+        places = await self._results.get_or_load(key, load_places)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
 
         logger.info(
@@ -85,7 +113,6 @@ class PlaceSearchService:
             extra={
                 "city": resolved.name,
                 "radius_km": radius_km,
-                "element_count": len(elements),
                 "place_count": len(places),
                 "elapsed_ms": elapsed_ms,
             },
