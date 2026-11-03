@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import PlaceSearchDep
 from app.schemas.place import ExportRequest, SearchRequest, SearchResponse
@@ -60,14 +61,27 @@ async def search_places(payload: SearchRequest, service: PlaceSearchDep) -> Sear
     },
     status_code=status.HTTP_200_OK,
 )
-async def export_places(payload: ExportRequest) -> Response:
+async def export_places(payload: ExportRequest, request: Request) -> Response:
     """Render already-fetched rows into a downloadable file.
 
     Stateless by design: the client posts back the rows it received from ``/places/search``, so
     Overpass is never queried twice for data the caller already holds.
     """
     exporter = get_exporter(payload.format)
-    content = exporter.render(payload.places, city_name=payload.city_name)
+    # Keep slots occupied until rendering actually ends, even if the caller times out.
+    slots: asyncio.Semaphore = request.app.state.export_slots
+    await slots.acquire()
+    task = asyncio.create_task(
+        asyncio.to_thread(exporter.render, payload.places, city_name=payload.city_name)
+    )
+
+    def rendered(completed: asyncio.Task[bytes]) -> None:
+        slots.release()
+        if not completed.cancelled():
+            completed.exception()  # retrieve an exception even if the request was cancelled
+
+    task.add_done_callback(rendered)
+    content = await asyncio.shield(task)
     filename = build_filename(payload.city_name, exporter.extension)
 
     logger.info(

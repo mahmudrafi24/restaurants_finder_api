@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -39,6 +41,8 @@ class UpstreamClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._nominatim_lock = asyncio.Lock()
+        self._next_geocode_at = 0.0
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.upstream_timeout_seconds, connect=10.0),
             headers={
@@ -78,10 +82,15 @@ class UpstreamClient:
 
         for attempt in range(1, attempts + 1):
             try:
-                response = await self._client.request(
-                    method, url, params=params, content=content, headers=headers
-                )
-            except httpx.TimeoutException:
+                async with asyncio.timeout(self._settings.upstream_timeout_seconds):
+                    if service == "Nominatim":
+                        async with self._nominatim_lock:
+                            await asyncio.sleep(max(0.0, self._next_geocode_at - time.monotonic()))
+                            self._next_geocode_at = time.monotonic() + 1.0
+                    response = await self._client.request(
+                        method, url, params=params, content=content, headers=headers
+                    )
+            except (httpx.TimeoutException, TimeoutError):
                 # The CLI only caught HTTPError, so a socket timeout killed the whole run.
                 last_error = UpstreamTimeoutError(service)
             except httpx.HTTPError as exc:
@@ -112,7 +121,9 @@ class UpstreamClient:
             retry_after = response.headers.get("Retry-After")
             if retry_after:
                 try:
-                    return min(float(retry_after), MAX_RETRY_AFTER_SECONDS)
+                    value = float(retry_after)
+                    if math.isfinite(value):
+                        return max(0.0, min(value, MAX_RETRY_AFTER_SECONDS))
                 except ValueError:
                     pass  # HTTP-date form; fall through to exponential backoff
         return self._settings.retry_backoff_seconds * (2.0 ** (attempt - 1))
@@ -126,7 +137,8 @@ class UpstreamClient:
             raw = response.headers.get("Retry-After")
             if raw:
                 try:
-                    retry_after = float(raw)
+                    value = float(raw)
+                    retry_after = max(0.0, value) if math.isfinite(value) else None
                 except ValueError:
                     retry_after = None
             return UpstreamRateLimitedError(service, retry_after)

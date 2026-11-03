@@ -12,11 +12,14 @@ coordinates never meaningfully change.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ValidationError
+
 from app.core.cache import TTLCache
-from app.core.errors import CityNotFoundError
+from app.core.errors import CityNotFoundError, UpstreamError
 from app.schemas.city import BoundingBox, City, dedupe_cities
 
 if TYPE_CHECKING:
@@ -53,12 +56,18 @@ class GeocodingService:
     def __init__(self, client: UpstreamClient, settings: Settings) -> None:
         self._client = client
         self._settings = settings
+        self._lookup_lock = asyncio.Lock()
         self._cache: TTLCache[list[City]] = TTLCache(
             ttl_seconds=settings.city_cache_ttl_seconds,
             max_entries=settings.city_cache_max_entries,
         )
 
     async def search(self, query: str, *, limit: int | None = None) -> list[City]:
+        """Coalesce concurrent cache misses within this process."""
+        async with self._lookup_lock:
+            return await self._lookup(query, limit=limit)
+
+    async def _lookup(self, query: str, *, limit: int | None = None) -> list[City]:
         """Return candidate places for a (possibly partial) name, best match first.
 
         Returns an empty list when nothing matches; callers that require a result should use
@@ -88,7 +97,15 @@ class GeocodingService:
                 "accept-language": self._settings.preferred_language,
             },
         )
-        cities = [city for raw in response.json() if (city := _parse_city(raw)) is not None]
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise UpstreamError(SERVICE_NAME, "Nominatim returned invalid JSON.") from exc
+        if not isinstance(payload, list):
+            raise UpstreamError(SERVICE_NAME, "Nominatim returned an invalid result list.")
+        cities = [city for raw in payload if (city := _parse_city(raw)) is not None]
+        if payload and not cities:
+            raise UpstreamError(SERVICE_NAME, "Nominatim returned no usable records.")
         cities.sort(key=_suggestion_rank)
         # Sort first: dedupe keeps the first occurrence, which should be the best-ranked one.
         cities = dedupe_cities(cities)
@@ -112,7 +129,18 @@ class GeocodingService:
         return results[0]
 
 
-def _parse_city(raw: dict[str, Any]) -> City | None:
+def _parse_city(raw: object) -> City | None:
+    """Skip malformed provider records without failing an entire lookup."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return _parse_city_record(raw)
+    except (ValidationError, TypeError, ValueError, AttributeError):
+        logger.warning("skipping malformed geocoder record")
+        return None
+
+
+def _parse_city_record(raw: dict[str, Any]) -> City | None:
     """Convert one Nominatim result into a :class:`City`, or ``None`` if it is unusable."""
     try:
         latitude = float(raw["lat"])
@@ -123,6 +151,8 @@ def _parse_city(raw: dict[str, Any]) -> City | None:
 
     display_name = str(raw.get("display_name") or "").strip()
     address = raw.get("address") or {}
+    if not isinstance(address, dict):
+        address = {}
 
     return City(
         name=_short_name(raw, display_name),
@@ -154,7 +184,10 @@ def _parse_bounding_box(raw: object) -> BoundingBox | None:
         south, north, west, east = (float(value) for value in raw)
     except (TypeError, ValueError):
         return None
-    return BoundingBox(south=south, north=north, west=west, east=east)
+    try:
+        return BoundingBox(south=south, north=north, west=west, east=east)
+    except ValidationError:
+        return None
 
 
 def _suggestion_rank(city: City) -> int:

@@ -8,15 +8,18 @@ This module contains the two fixes that recover the data the original CLI droppe
 * **The search radius is an explicit parameter.** The CLI iterated ``[5, 8, 12]`` km and broke on
   the first success, so a healthy run never looked beyond 5 km.
 
-A second, narrower dedup pass then collapses genuine double-mappings — the same venue tagged
-both as a node and as a building way — which share a name, amenity and position but not an id.
+A conservative second pass merges unambiguous node/outline pairs only when a shared
+address or contact identity corroborates their name, amenity and nearby position.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import re
 import time
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlsplit
 
 from app.schemas.city import City
 from app.schemas.place import Address, AmenityType, Place, SearchResponse, SearchStats
@@ -28,11 +31,6 @@ if TYPE_CHECKING:
     from app.services.overpass import OverpassService
 
 logger = logging.getLogger(__name__)
-
-#: Coordinate precision for near-duplicate detection. Four decimal places is roughly 11 m at
-#: mid-latitudes — tight enough to keep neighbouring venues distinct, loose enough to match a
-#: POI node against the centroid of its own building outline.
-_COORD_PRECISION: Final[int] = 4
 
 #: OSM tags checked in order when reading a single logical value. ``contact:*`` is the newer
 #: convention; plenty of data still uses the bare key.
@@ -118,6 +116,12 @@ def normalize_elements(elements: Iterable[dict[str, Any]]) -> list[Place]:
 
     for element in elements:
         tags = element.get("tags") or {}
+        if not isinstance(tags, dict):
+            continue
+        if element.get("type") not in {"node", "way", "relation"}:
+            continue
+        if not isinstance(element.get("id"), int) or element["id"] <= 0:
+            continue
 
         name = _clean(tags.get("name"))
         if not name:
@@ -163,32 +167,74 @@ def normalize_elements(elements: Iterable[dict[str, Any]]) -> list[Place]:
 
 
 def _collapse_double_mappings(places: Iterable[Place]) -> list[Place]:
-    """Drop entries that describe the same venue twice.
+    """Merge only unambiguous node/outline pairs with a shared address or contact identity.
 
-    OSM frequently carries a venue both as a POI node and as a building way. Those share name,
-    amenity and position but have different ids, so id-based dedup keeps both. Matching on
-    (name, amenity, rounded position) removes the duplicate while leaving distinct venues —
-    even same-named ones a street apart — untouched.
-
-    The richer record wins, so an entry with a phone number is preferred over a bare one.
+    Proximity and chain names alone never prove identity. Preserve ambiguous mappings rather
+    than risk deleting a real outlet. Grouping by name/amenity bounds candidate comparisons.
     """
-    best: dict[tuple[str, str, float, float], Place] = {}
-    total = 0
+    groups: dict[tuple[str, AmenityType], list[Place]] = {}
     for place in places:
-        total += 1
-        key = (
-            place.name.casefold(),
-            place.amenity.value,
-            round(place.latitude, _COORD_PRECISION),
-            round(place.longitude, _COORD_PRECISION),
-        )
-        incumbent = best.get(key)
-        if incumbent is None or _completeness(place) > _completeness(incumbent):
-            best[key] = place
+        groups.setdefault((place.name.casefold(), place.amenity), []).append(place)
+    result: list[Place] = []
+    for group in groups.values():
+        matches = {
+            place.osm_id: [other for other in group if _same_venue(place, other)] for place in group
+        }
+        consumed: set[str] = set()
+        for place in group:
+            if place.osm_id in consumed:
+                continue
+            candidates = matches[place.osm_id]
+            if len(candidates) == 1 and len(matches[candidates[0].osm_id]) == 1:
+                other = candidates[0]
+                consumed.add(other.osm_id)
+                richer, poorer = sorted((place, other), key=_completeness, reverse=True)
+                address = Address(
+                    **{
+                        field: getattr(richer.address, field) or getattr(poorer.address, field)
+                        for field in Address.model_fields
+                    }
+                )
+                place = richer.model_copy(
+                    update={
+                        "address": address,
+                        "phone": richer.phone or poorer.phone,
+                        "website": richer.website or poorer.website,
+                        "opening_hours": richer.opening_hours or poorer.opening_hours,
+                        "cuisine": list(dict.fromkeys([*richer.cuisine, *poorer.cuisine]))[:100],
+                    }
+                )
+            consumed.add(place.osm_id)
+            result.append(place)
+    return result
 
-    if (removed := total - len(best)) > 0:
-        logger.debug("collapsed double-mapped venues", extra={"removed": removed})
-    return list(best.values())
+
+def _same_venue(left: Place, right: Place) -> bool:
+    types = {left.osm_id.split("/")[0], right.osm_id.split("/")[0]}
+    if types not in ({"node", "way"}, {"node", "relation"}):
+        return False
+    for field in Address.model_fields:
+        a, b = getattr(left.address, field), getattr(right.address, field)
+        if a and b and a.casefold() != b.casefold():
+            return False
+    same_address = all(
+        getattr(left.address, field)
+        and getattr(left.address, field).casefold()
+        == (getattr(right.address, field) or "").casefold()
+        for field in ("street", "house_number")
+    )
+    same_contact = bool(
+        (left.phone and left.phone == right.phone)
+        or (left.website and left.website == right.website)
+    )
+    if not (same_address or same_contact):
+        return False
+    lat1, lat2 = math.radians(left.latitude), math.radians(right.latitude)
+    dlat = lat2 - lat1
+    dlon = math.radians(right.longitude - left.longitude)
+    haversine = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    distance = 6_371_000 * 2 * math.asin(min(1.0, math.sqrt(haversine)))
+    return distance <= 10.0
 
 
 def _completeness(place: Place) -> int:
@@ -212,6 +258,8 @@ def _extract_coordinates(element: dict[str, Any]) -> tuple[float, float] | None:
         latitude, longitude = element.get("lat"), element.get("lon")
     else:
         center = element.get("center") or {}
+        if not isinstance(center, dict):
+            return None
         latitude, longitude = center.get("lat"), center.get("lon")
 
     if latitude is None or longitude is None:
@@ -241,7 +289,7 @@ def _parse_cuisine(raw: object) -> list[str]:
     if not isinstance(raw, str):
         return []
     values = (part.strip().lower() for part in raw.split(";"))
-    return list(dict.fromkeys(value for value in values if value))
+    return list(dict.fromkeys(value[:2000] for value in values if value))[:100]
 
 
 def _parse_address(tags: dict[str, Any]) -> Address:
@@ -264,26 +312,36 @@ def _first_tag(tags: dict[str, Any], keys: Sequence[str]) -> str | None:
 
 
 def _normalize_website(raw: str | None) -> str | None:
-    """Ensure a website value is a usable absolute URL.
-
-    OSM data commonly omits the scheme (``www.example.com``). Values that still do not look like
-    a URL are dropped rather than surfaced as broken links.
-    """
-    if not raw:
+    """Accept HTTP(S) URLs and plausible bare hostnames, rejecting unsupported schemes."""
+    if not raw or any(char.isspace() or ord(char) < 32 for char in raw) or "\\" in raw:
         return None
     value = raw.strip()
-    if value.lower().startswith(("http://", "https://")):
-        return value
-    if "." not in value or " " in value:
+    if not value.lower().startswith(("http://", "https://")):
+        if ":" in value.split("/")[0] or "://" in value or value.startswith("/"):
+            return None
+        value = "https://" + value
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").encode("idna").decode("ascii")
+        if parsed.scheme.lower() not in {"http", "https"} or parsed.username or parsed.password:
+            return None
+        if not host or "." not in host or parsed.port == 0:
+            return None
+        if any(
+            not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            for label in host.rstrip(".").split(".")
+        ):
+            return None
+    except (ValueError, UnicodeError):
         return None
-    return f"https://{value.lstrip('/')}"
+    return value
 
 
 def _clean(value: object) -> str | None:
     """Trim a tag value, collapsing empties to ``None``."""
     if not isinstance(value, str):
         return None
-    return value.strip() or None
+    return value.strip()[:2000] or None
 
 
 # ── Statistics ───────────────────────────────────────────────────────────────

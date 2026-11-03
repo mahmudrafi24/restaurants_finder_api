@@ -9,7 +9,7 @@ import pytest
 import respx
 
 from app.config import USER_AGENT_PRODUCT, Settings
-from app.core.errors import UpstreamUnavailableError
+from app.core.errors import UpstreamError, UpstreamUnavailableError
 from app.core.http import UpstreamClient
 from app.services.suggest import SuggestionService
 from tests.conftest import PHOTON_URL
@@ -205,16 +205,20 @@ class TestMalformedResponses:
             ({"features": ["nonsense"]}, "feature is not an object"),
         ],
     )
-    async def test_unusable_features_are_skipped_not_raised(
+    async def test_unusable_payloads_trigger_fallback_except_valid_empty_results(
         self,
         service: SuggestionService,
         mock_upstreams: respx.MockRouter,
         payload: dict[str, Any],
         reason: str,
     ) -> None:
-        """A malformed suggestion should quietly disappear, not break the search box."""
+        """A completely unusable response triggers the route's provider fallback."""
         mock_upstreams.get(PHOTON_URL).respond(json=payload)
-        assert await service.suggest("query") == [], reason
+        if payload == {"features": []}:
+            assert await service.suggest("query") == [], reason
+        else:
+            with pytest.raises(UpstreamError):
+                await service.suggest("query")
 
 
 class TestDeduplication:

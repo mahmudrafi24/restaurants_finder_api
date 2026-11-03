@@ -14,7 +14,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from app.services.exporters.base import COLUMN_HEADERS, row_values
+from app.services.exporters.base import COLUMN_HEADERS, row_values, workbook_text
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -55,7 +55,8 @@ class XlsxExporter:
         # ── Title banner ──
         worksheet.merge_cells(f"A1:{last_column}1")
         title = worksheet["A1"]
-        title.value = f"Cafes & Restaurants — {city_name}   ({len(places)} results)"
+        title.value = workbook_text(f"Cafes & Restaurants — {city_name}   ({len(places)} results)")
+        title.data_type = "s"
         title.font = Font(bold=True, size=14, color=_INK, name=_FONT_NAME)
         title.fill = PatternFill("solid", fgColor=_ACCENT)
         title.alignment = Alignment(horizontal="center", vertical="center")
@@ -89,7 +90,10 @@ class XlsxExporter:
             fill = band_fill if row % 2 == 0 else plain_fill
 
             for column, value in enumerate(row_values(place), start=1):
-                cell = worksheet.cell(row=row, column=column, value=value)
+                cell = worksheet.cell(row=row, column=column)
+                cell.value = workbook_text(value) if isinstance(value, str) else value
+                if isinstance(value, str):
+                    cell.data_type = "s"
                 cell.fill = fill
                 cell.border = border
                 cell.alignment = body_alignment

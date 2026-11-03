@@ -12,7 +12,6 @@ from typing import Annotated, Final, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from typing_extensions import Self
 
 Environment = Literal["development", "staging", "production"]
 
@@ -96,13 +95,16 @@ class Settings(BaseSettings):
     preferred_language: str = "en"
 
     # ── Upstream: timeouts and retries ───────────────────────────────────────
-    # Must stay below the platform's function timeout (Vercel: `maxDuration`, 60s here).
-    upstream_timeout_seconds: float = 55.0
+    # A total 55s deadline covers provider calls, retries and fallback mirrors.
+    upstream_timeout_seconds: float = Field(default=16.0, gt=0, le=55)
+    request_timeout_seconds: float = Field(default=55.0, gt=0, le=55)
+    max_concurrent_requests: int = Field(default=4, ge=1, le=20)
+    requests_per_minute: int = Field(default=30, ge=1)
     # Value passed to Overpass' own `[timeout:N]` setting, in seconds. Kept under
     # `upstream_timeout_seconds` so Overpass reports a clean error before our socket gives up.
-    overpass_query_timeout_seconds: int = 50
-    max_retries: int = 2
-    retry_backoff_seconds: float = 1.5
+    overpass_query_timeout_seconds: int = Field(default=12, ge=1, le=50)
+    max_retries: int = Field(default=0, ge=0, le=2)
+    retry_backoff_seconds: float = Field(default=1.5, ge=0, le=5)
 
     # ── Search defaults ──────────────────────────────────────────────────────
     # Hard limits (radius ceiling, export row cap) live in app.schemas.place as part of the

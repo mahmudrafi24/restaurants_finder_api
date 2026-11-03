@@ -12,7 +12,7 @@ import csv
 import io
 from typing import TYPE_CHECKING
 
-from app.services.exporters.base import COLUMN_HEADERS, row_values
+from app.services.exporters.base import COLUMN_HEADERS, csv_value, row_values
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -30,5 +30,5 @@ class CsvExporter:
         buffer = io.StringIO(newline="")
         writer = csv.writer(buffer, quoting=csv.QUOTE_MINIMAL, lineterminator="\r\n")
         writer.writerow(COLUMN_HEADERS)
-        writer.writerows(row_values(place) for place in places)
+        writer.writerows(tuple(csv_value(value) for value in row_values(place)) for place in places)
         return codecs.BOM_UTF8 + buffer.getvalue().encode("utf-8")

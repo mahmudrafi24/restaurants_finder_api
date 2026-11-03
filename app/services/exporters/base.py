@@ -34,6 +34,21 @@ COLUMN_HEADERS: tuple[str, ...] = (
 
 #: Placeholder for missing values, matching the CLI's output.
 EMPTY = "N/A"
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def workbook_text(value: str) -> str:
+    """Remove text XML cannot represent, including isolated JSON surrogate escapes."""
+    return _XML_ILLEGAL.sub("", value)
+
+
+def csv_value(value: str | float) -> str | float:
+    """Keep untrusted text literal in spreadsheet readers (including phone numbers)."""
+    if isinstance(value, str):
+        probe = re.sub(r"^[\s\x00-\x20]*", "", value)
+        if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+            return "'" + value
+    return value
 
 
 @runtime_checkable
