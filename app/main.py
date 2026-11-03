@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -44,25 +43,6 @@ Data © OpenStreetMap contributors, available under the
 """
 
 
-async def _keep_awake_task() -> None:
-    """Pings the external Render URL to prevent the free tier from sleeping."""
-    external_url = os.getenv("RENDER_EXTERNAL_URL")
-    if not external_url:
-        return
-
-    health_url = f"{external_url.rstrip('/')}/api/v1/health"
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        while True:
-            await asyncio.sleep(600)  # 10 minutes
-            try:
-                await client.get(health_url, timeout=10.0)
-                logger.debug("pinged self to stay awake", extra={"url": health_url})
-            except Exception as exc:
-                logger.warning("self-ping failed", exc_info=exc)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the shared HTTP client and services once per process, and close them cleanly."""
@@ -91,13 +71,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         extra={"environment": settings.environment, "version": VERSION},
     )
 
-    awake_task = asyncio.create_task(_keep_awake_task())
     try:
         yield
     finally:
-        awake_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await awake_task
         await upstream.aclose()
         logger.info("application stopped")
 
