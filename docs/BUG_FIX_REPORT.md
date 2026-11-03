@@ -44,3 +44,11 @@ Update existing environment overrides to the values documented in `.env.example`
 `MAX_CONCURRENT_REQUESTS` defaults to 4; `REQUESTS_PER_MINUTE` defaults to 30. Limits, request coalescing, pacing and cache storage are per process. Multiple workers/replicas need a shared ingress rate limiter and provider pacing, or a single geocoding worker/service. Configure trusted proxy handling at deployment so the ASGI client address reflects the actual client; this middleware does not trust arbitrary forwarded headers.
 
 Exports above the byte limit must be narrowed using result filters. Text over the schema limits is rejected for submitted exports; external place tags are bounded during normalization. Conservative deduplication intentionally retains uncertain duplicates rather than deleting possible real venues. System-wide load testing, live-provider smoke testing and deployment verification remain external validation steps.
+
+## Follow-up code refactor
+
+Request limiting now separates client admission, bounded body reads, body replay and deadline
+handling into focused helpers. Threaded export rendering and cancellation-safe slot management
+live in `app/services/exporters/render.py`, keeping the export route focused on HTTP responses.
+The existing 206 tests pass, Ruff passes, and mypy passes for 32 application files. The same
+sandbox-only test-runner workaround described above was used.

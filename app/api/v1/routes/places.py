@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from urllib.parse import quote
 
@@ -11,6 +10,7 @@ from fastapi import APIRouter, Request, Response, status
 from app.api.deps import PlaceSearchDep
 from app.schemas.place import ExportRequest, SearchRequest, SearchResponse
 from app.services.exporters.base import build_filename, get_exporter
+from app.services.exporters.render import render_export
 
 logger = logging.getLogger(__name__)
 
@@ -68,20 +68,12 @@ async def export_places(payload: ExportRequest, request: Request) -> Response:
     Overpass is never queried twice for data the caller already holds.
     """
     exporter = get_exporter(payload.format)
-    # Keep slots occupied until rendering actually ends, even if the caller times out.
-    slots: asyncio.Semaphore = request.app.state.export_slots
-    await slots.acquire()
-    task = asyncio.create_task(
-        asyncio.to_thread(exporter.render, payload.places, city_name=payload.city_name)
+    content = await render_export(
+        exporter,
+        payload.places,
+        city_name=payload.city_name,
+        slots=request.app.state.export_slots,
     )
-
-    def rendered(completed: asyncio.Task[bytes]) -> None:
-        slots.release()
-        if not completed.cancelled():
-            completed.exception()  # retrieve an exception even if the request was cancelled
-
-    task.add_done_callback(rendered)
-    content = await asyncio.shield(task)
     filename = build_filename(payload.city_name, exporter.extension)
 
     logger.info(
