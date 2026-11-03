@@ -137,7 +137,7 @@ def _parse_feature_record(raw: dict[str, Any]) -> City | None:
     try:
         # GeoJSON order is [longitude, latitude].
         longitude, latitude = float(coordinates[0]), float(coordinates[1])
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         logger.warning("skipping Photon feature with non-numeric coordinates")
         return None
 
@@ -184,7 +184,7 @@ def _parse_extent(raw: object) -> BoundingBox | None:
         return None
     try:
         west, north, east, south = (float(value) for value in raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     try:
         return BoundingBox(south=south, north=north, west=west, east=east)

@@ -52,3 +52,18 @@ handling into focused helpers. Threaded export rendering and cancellation-safe s
 live in `app/services/exporters/render.py`, keeping the export route focused on HTTP responses.
 The existing 206 tests pass, Ruff passes, and mypy passes for 32 application files. The same
 sandbox-only test-runner workaround described above was used.
+
+## Follow-up: overflowing provider coordinates
+
+Very large JSON integers (for example, `10**400`) raised uncaught `OverflowError` during
+coordinate conversion in Nominatim, Photon and Overpass normalization. The same problem affected
+optional Nominatim bounding boxes and Photon extents. These values now follow the existing
+malformed-data policy: skip unusable coordinates, discard invalid optional bounds, and activate
+Nominatim fallback when Photon has no usable records.
+
+Seven regression cases cover positive/negative overflow in latitude and longitude, all three
+OSM object types, each optional bounding-box position, and route-level Photon fallback.
+Verification: 213 tests passed with the existing external selector launcher; the six new parser
+cases also passed with ordinary pytest. Ruff and mypy passed. Test commands used `DEBUG=false`
+to override this session's unrelated `DEBUG=release` environment value, which is not a valid
+boolean setting. The full default suite and deployed smoke tests remain unverified here.

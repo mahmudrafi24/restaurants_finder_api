@@ -141,11 +141,60 @@ def test_unusable_geocoder_records_do_not_raise(raw: Any) -> None:
     assert _parse_feature(raw) is None
 
 
+@pytest.mark.parametrize("coordinate", [10**400, -(10**400)])
+def test_overflowing_provider_coordinates_are_skipped(coordinate: int) -> None:
+    for latitude, longitude in ((coordinate, 0), (0, coordinate)):
+        assert _parse_city({"lat": latitude, "lon": longitude}) is None
+        assert (
+            _parse_feature(
+                {
+                    "geometry": {"coordinates": [longitude, latitude]},
+                    "properties": {"name": "Test"},
+                }
+            )
+            is None
+        )
+        for kind in ("node", "way", "relation"):
+            assert (
+                normalize_elements(
+                    [
+                        {
+                            "type": kind,
+                            "id": 1,
+                            "lat": latitude,
+                            "lon": longitude,
+                            "center": {"lat": latitude, "lon": longitude},
+                            "tags": {"name": "Test", "amenity": "cafe"},
+                        }
+                    ]
+                )
+                == []
+            )
+
+
+@pytest.mark.parametrize("index", range(4))
+def test_overflowing_optional_bounds_preserve_valid_cities(index: int) -> None:
+    bounds = [0, 0, 0, 0]
+    bounds[index] = 10**400
+    nominatim = _parse_city({"lat": 0, "lon": 0, "name": "Test", "boundingbox": bounds})
+    photon = _parse_feature(
+        {
+            "geometry": {"coordinates": [0, 0]},
+            "properties": {"name": "Test", "extent": bounds},
+        }
+    )
+    for city in (nominatim, photon):
+        assert city is not None
+        assert city.name == "Test"
+        assert city.bounding_box is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [
         {"features": None},
         [1],
+        {"features": [{"geometry": {"coordinates": [0, 10**400]}, "properties": {"name": "Bad"}}]},
         {"features": [{"geometry": {"coordinates": [0, 999]}, "properties": {"name": "Bad"}}]},
     ],
 )

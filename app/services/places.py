@@ -266,7 +266,7 @@ def _extract_coordinates(element: dict[str, Any]) -> tuple[float, float] | None:
         return None
     try:
         parsed = (float(latitude), float(longitude))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
     if not (-90 <= parsed[0] <= 90 and -180 <= parsed[1] <= 180):

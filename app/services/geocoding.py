@@ -145,7 +145,7 @@ def _parse_city_record(raw: dict[str, Any]) -> City | None:
     try:
         latitude = float(raw["lat"])
         longitude = float(raw["lon"])
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, OverflowError):
         logger.warning("skipping Nominatim result without usable coordinates")
         return None
 
@@ -182,7 +182,7 @@ def _parse_bounding_box(raw: object) -> BoundingBox | None:
         return None
     try:
         south, north, west, east = (float(value) for value in raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     try:
         return BoundingBox(south=south, north=north, west=west, east=east)
