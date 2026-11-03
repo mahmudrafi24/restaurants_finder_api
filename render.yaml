@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: restaurants-finder-api
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: fix/backend-bug-audit
+    buildCommand: pip install .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: APP_URL
+        value: https://github.com/mahmudrafi24/restaurants_finder_api
+      - key: CONTACT_EMAIL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: CORS_ORIGIN_REGEX
+        value: ""
+      - key: MAX_CONCURRENT_REQUESTS
+        value: "2"
+      - key: REQUESTS_PER_MINUTE
+        value: "30"
+      - key: OVERPASS_ATTEMPT_TIMEOUT_SECONDS
+        value: "16"
+      - key: PLACE_CACHE_TTL_SECONDS
+        value: "600"
+      - key: PLACE_CACHE_MAX_ENTRIES
+        value: "8"
+      - key: PLACE_CACHE_MAX_ENTRY_BYTES
+        value: "2000000"

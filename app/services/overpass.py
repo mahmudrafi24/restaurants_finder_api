@@ -14,10 +14,11 @@ Two details here differ from the original CLI and matter:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from app.core.errors import UpstreamError
+from app.core.errors import UpstreamError, UpstreamTimeoutError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -69,23 +70,28 @@ class OverpassService:
 
         for i, url in enumerate(overpass_urls, 1):
             try:
-                response = await self._client.request(
-                    "POST",
-                    url,
-                    service=SERVICE_NAME,
-                    content=query,
-                    # Raw body, not application/x-www-form-urlencoded — see the module docstring.
-                    headers={"Content-Type": "text/plain; charset=utf-8"},
+                # Legacy deployment retry/timeout overrides must not spend the whole
+                # request budget on one unavailable endpoint and starve the mirrors.
+                async with asyncio.timeout(self._settings.overpass_attempt_timeout_seconds):
+                    response = await self._client.request(
+                        "POST",
+                        url,
+                        service=SERVICE_NAME,
+                        content=query,
+                        headers={"Content-Type": "text/plain; charset=utf-8"},
+                        allow_retries=False,
+                    )
+            except (UpstreamError, TimeoutError) as exc:
+                last_error = (
+                    exc if isinstance(exc, UpstreamError) else UpstreamTimeoutError(SERVICE_NAME)
                 )
-            except UpstreamError as exc:
-                last_error = exc
                 if i < len(overpass_urls):
                     logger.warning(
                         "Overpass endpoint %s failed, trying next mirror (%d/%d): %s",
                         url,
                         i,
                         len(overpass_urls),
-                        exc.message,
+                        last_error.message,
                     )
                 continue
 
@@ -146,8 +152,12 @@ class OverpassService:
         """Build the Overpass QL query. Separated from I/O so it can be asserted on in tests."""
         amenity_filter = "|".join(amenity.value for amenity in amenities)
         radius_m = radius_km * 1000
+        query_timeout = min(
+            self._settings.overpass_query_timeout_seconds,
+            max(1, int(self._settings.overpass_attempt_timeout_seconds) - 4),
+        )
         return (
-            f"[out:json][timeout:{self._settings.overpass_query_timeout_seconds}];\n"
+            f"[out:json][timeout:{query_timeout}];\n"
             f'nwr["amenity"~"^({amenity_filter})$"]'
             f"(around:{radius_m},{latitude},{longitude});\n"
             "out center tags;"

@@ -2,7 +2,7 @@
 
 HTTP API that collects cafe, restaurant and fast-food data from OpenStreetMap and exports it to XLSX, CSV or GeoJSON.
 
-Built with **FastAPI** · Deployed on **Vercel** · Data © OpenStreetMap contributors ([ODbL](https://www.openstreetmap.org/copyright))
+Built with **FastAPI** · [Render Free deployment](docs/DEPLOYMENT.md) · Data © OpenStreetMap contributors ([ODbL](https://www.openstreetmap.org/copyright))
 
 ---
 

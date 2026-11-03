@@ -65,6 +65,7 @@ class UpstreamClient:
         params: dict[str, Any] | None = None,
         content: str | None = None,
         headers: dict[str, str] | None = None,
+        allow_retries: bool = True,
     ) -> httpx.Response:
         """Perform a request, retrying transient failures.
 
@@ -77,7 +78,7 @@ class UpstreamClient:
             UpstreamUnavailableError: The upstream is down or unreachable.
             UpstreamError: Any other non-success response.
         """
-        attempts = self._settings.max_retries + 1
+        attempts = self._settings.max_retries + 1 if allow_retries else 1
         last_error: UpstreamError | None = None
 
         for attempt in range(1, attempts + 1):
